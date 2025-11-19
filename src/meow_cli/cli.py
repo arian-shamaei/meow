@@ -35,17 +35,20 @@ def _load_gif():
 def _halfblock_ascii(gray_img, cols, rows):
     # gray_img expected mode 'L' sized (cols, rows*2)
     px = gray_img.load()
-    threshold = 128
+    # use ordered dithering 2x2 for smoother shading
+    bayer = ((0, 128), (192, 64))
     lines = []
     h = gray_img.size[1]
-    # Combine two vertical pixels per terminal row
     for y in range(0, min(h, rows * 2), 2):
         line_chars = []
         for x in range(cols):
             top = px[x, y]
             bottom = px[x, y + 1] if y + 1 < h else 255
-            top_dark = top < threshold
-            bottom_dark = bottom < threshold
+            # invert brightness: darker -> filled
+            tt = bayer[(y // 1) & 1][x & 1]
+            bt = bayer[(y + 1) & 1][x & 1]
+            top_dark = top < tt
+            bottom_dark = bottom < bt
             if top_dark and bottom_dark:
                 ch = "█"
             elif top_dark and not bottom_dark:
@@ -59,7 +62,73 @@ def _halfblock_ascii(gray_img, cols, rows):
     return "\n".join(lines)
 
 
-def _tui(stdscr, *, debug=False, fit_mode="contain"):
+def _braille_ascii(gray_img, cols, rows):
+    # gray_img expected mode 'L' sized (cols*2, rows*4)
+    # Braille dot layout indexes: (x,y) -> bit
+    # (0,0)->1, (0,1)->2, (0,2)->4, (1,0)->8, (1,1)->16, (1,2)->32, (0,3)->64, (1,3)->128
+    px = gray_img.load()
+    lines = []
+    # 2x4 Bayer matrix thresholds (0..255 scaled)
+    bayer = (
+        (0, 128),
+        (192, 64),
+        (48, 176),
+        (240, 112),
+    )
+    for cy in range(rows):
+        y0 = cy * 4
+        line_chars = []
+        for cx in range(cols):
+            x0 = cx * 2
+            bits = 0
+            # For each subpixel in 2x4 block, compare against threshold
+            for dy in range(4):
+                for dx in range(2):
+                    yy = y0 + dy
+                    xx = x0 + dx
+                    val = px[xx, yy] if (xx < gray_img.size[0] and yy < gray_img.size[1]) else 255
+                    thr = bayer[dy][dx]
+                    dark = val < thr  # inverted
+                    if dark:
+                        # Map to braille bit
+                        if dx == 0 and dy == 0:
+                            bits |= 0x01
+                        elif dx == 0 and dy == 1:
+                            bits |= 0x02
+                        elif dx == 0 and dy == 2:
+                            bits |= 0x04
+                        elif dx == 1 and dy == 0:
+                            bits |= 0x08
+                        elif dx == 1 and dy == 1:
+                            bits |= 0x10
+                        elif dx == 1 and dy == 2:
+                            bits |= 0x20
+                        elif dx == 0 and dy == 3:
+                            bits |= 0x40
+                        elif dx == 1 and dy == 3:
+                            bits |= 0x80
+            ch = chr(0x2800 + bits) if bits else " "
+            line_chars.append(ch)
+        lines.append("".join(line_chars))
+    return "\n".join(lines)
+
+
+def _full_ascii(gray_img, cols, rows):
+    # gray_img mode 'L' sized (cols, rows). Map average brightness to levels
+    px = gray_img.load()
+    shades = [" ", "░", "▒", "▓", "█"]  # inverted levels low->bright
+    lines = []
+    for y in range(rows):
+        line_chars = []
+        for x in range(cols):
+            v = px[x, y]
+            idx = 4 - min(4, int(v * 5 / 256))  # inverted
+            line_chars.append(shades[idx])
+        lines.append("".join(line_chars))
+    return "\n".join(lines)
+
+
+def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.keypad(True)
@@ -104,28 +173,44 @@ def _tui(stdscr, *, debug=False, fit_mode="contain"):
                 cache_size = size_key
                 cached_ascii = []
                 cached_info = None
-                target_canvas_h = rows * 2
+                # Choose pixel mode
+                mode = pixel_mode
+                if mode == "auto":
+                    # Prefer braille when reasonably sized terminal
+                    mode = "braille" if rows >= 6 and cols >= 10 else "half"
+                if mode == "braille":
+                    canvas_w = cols * 2
+                    canvas_h = rows * 4
+                    renderer = _braille_ascii
+                elif mode == "half":
+                    canvas_w = cols
+                    canvas_h = rows * 2
+                    renderer = _halfblock_ascii
+                else:  # full
+                    canvas_w = cols
+                    canvas_h = rows
+                    renderer = _full_ascii
                 # Compute uniform scale to fit within terminal canvas preserving ratio
                 if fit_mode == "cover":
-                    scale = max(max(1, cols) / max(1, src_w), max(1, target_canvas_h) / max(1, src_h))
+                    scale = max(max(1, canvas_w) / max(1, src_w), max(1, canvas_h) / max(1, src_h))
                 else:
-                    scale = min(max(1, cols) / max(1, src_w), max(1, target_canvas_h) / max(1, src_h))
+                    scale = min(max(1, canvas_w) / max(1, src_w), max(1, canvas_h) / max(1, src_h))
                 # Ensure at least 1x1 after scaling
                 scaled_w = max(1, int(src_w * scale))
                 scaled_h = max(1, int(src_h * scale))
                 # Clamp to canvas in case rounding overshoots
-                scaled_w = min(cols, scaled_w)
-                scaled_h = min(target_canvas_h, scaled_h)
-                x_off = (cols - scaled_w) // 2
-                y_off = (target_canvas_h - scaled_h) // 2
+                scaled_w = min(canvas_w, scaled_w)
+                scaled_h = min(canvas_h, scaled_h)
+                x_off = (canvas_w - scaled_w) // 2
+                y_off = (canvas_h - scaled_h) // 2
 
                 for fr in frames:
                     # Create white canvas so letterboxed areas render as blanks
-                    canvas = Image.new('L', (cols, target_canvas_h), color=255)
-                    g = fr.convert('L').resize((scaled_w, scaled_h), Image.BILINEAR)
+                    canvas = Image.new('L', (canvas_w, canvas_h), color=255)
+                    g = fr.convert('L').resize((scaled_w, scaled_h), Image.NEAREST)
                     canvas.paste(g, (x_off, y_off))
-                    cached_ascii.append(_halfblock_ascii(canvas, cols, rows))
-                cached_info = (scaled_w, scaled_h, x_off, y_off)
+                    cached_ascii.append(renderer(canvas, cols, rows))
+                cached_info = (scaled_w, scaled_h, x_off, y_off, mode)
                 # Adjust curses internal structures to new size
                 try:
                     curses.resizeterm(rows, cols)
@@ -141,12 +226,21 @@ def _tui(stdscr, *, debug=False, fit_mode="contain"):
                     pass
             # Optional debug overlay (border + status line)
             if debug and cached_info is not None:
-                sw, sh, xo, yo = cached_info
+                sw, sh, xo, yo, mode = cached_info
                 # Map pixel canvas coords to cell coords
-                top = yo // 2
-                scaled_rows = (sh + 1) // 2
-                left = xo
-                right = min(cols - 1, left + sw - 1)
+                if mode == "braille":
+                    top = yo // 4
+                    scaled_rows = (sh + 3) // 4
+                    left = xo // 2
+                elif mode == "half":
+                    top = yo // 2
+                    scaled_rows = (sh + 1) // 2
+                    left = xo
+                else:
+                    top = yo
+                    scaled_rows = sh
+                    left = xo
+                right = min(cols - 1, left + (sw // (2 if mode=="braille" else 1)) - 1)
                 bottom = min(rows - 1, top + scaled_rows - 1)
                 # Draw border
                 try:
@@ -171,7 +265,7 @@ def _tui(stdscr, *, debug=False, fit_mode="contain"):
                 except curses.error:
                     pass
                 # Status line at bottom
-                status = f"term {cols}x{rows} | src {src_w}x{src_h} | scaled {sw}x{sh} px | fit {fit_mode} | off {xo},{yo}"
+                status = f"term {cols}x{rows} | src {src_w}x{src_h} | scaled {sw}x{sh} px | fit {fit_mode} | mode {mode} | off {xo},{yo}"
                 try:
                     stdscr.addnstr(rows - 1, 0, status.ljust(cols), cols)
                 except curses.error:
@@ -194,6 +288,7 @@ def _tui(stdscr, *, debug=False, fit_mode="contain"):
 def main():
     debug = False
     fit_mode = "contain"
+    pixel_mode = "auto"
     for arg in sys.argv[1:]:
         if arg in ("-d", "--debug"):
             debug = True
@@ -201,4 +296,8 @@ def main():
             val = arg.split("=", 1)[1].strip().lower()
             if val in ("contain", "cover"):
                 fit_mode = val
-    curses.wrapper(lambda stdscr: _tui(stdscr, debug=debug, fit_mode=fit_mode))
+        elif arg.startswith("--pixel-mode="):
+            val = arg.split("=", 1)[1].strip().lower()
+            if val in ("auto", "braille", "half", "full"):
+                pixel_mode = val
+    curses.wrapper(lambda stdscr: _tui(stdscr, debug=debug, fit_mode=fit_mode, pixel_mode=pixel_mode))
