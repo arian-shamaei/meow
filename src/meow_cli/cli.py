@@ -61,7 +61,7 @@ def _halfblock_ascii(gray_img, cols, rows):
                 ch = " "
             line_chars.append(ch)
         lines.append("".join(line_chars))
-    return "\n".join(lines)
+    return lines
 
 
 def _braille_ascii(gray_img, cols, rows):
@@ -112,7 +112,7 @@ def _braille_ascii(gray_img, cols, rows):
             ch = chr(0x2800 + bits) if bits else " "
             line_chars.append(ch)
         lines.append("".join(line_chars))
-    return "\n".join(lines)
+    return lines
 
 
 def _full_ascii(gray_img, cols, rows):
@@ -127,7 +127,7 @@ def _full_ascii(gray_img, cols, rows):
             idx = 4 - min(4, int(v * 5 / 256))  # inverted
             line_chars.append(shades[idx])
         lines.append("".join(line_chars))
-    return "\n".join(lines)
+    return lines
 
 
 def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
@@ -141,9 +141,9 @@ def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
     idx = 0
 
     # Cache ascii frames per terminal size for smoothness
-    cache_size = None
-    cached_ascii = None
-    cached_info = None  # (scaled_w, scaled_h, x_off, y_off)
+    cache_key = None
+    cached_ascii = None  # list[str] per frame
+    cached_info = None  # (scaled_w, scaled_h, x_off, y_off, mode, avail_rows)
     src_w, src_h = frames[0].size
 
     def _detect_term_size():
@@ -204,34 +204,37 @@ def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
                 pass
 
             rows, cols = stdscr.getmaxyx()
-            rows = max(1, rows)  # use all rows
+            rows = max(1, rows)
             cols = max(1, cols)
             if rows <= 1 or cols <= 1:
                 # Fallback detection if curses reports something tiny
                 cols, rows = _detect_term_size()
 
-            size_key = (cols, rows)
-            if size_key != cache_size:
+            # Reserve a status line in debug mode to avoid overlap
+            avail_rows = max(1, rows - (1 if debug else 0))
+
+            size_key = (cols, avail_rows, fit_mode, pixel_mode)
+            if size_key != cache_key:
                 # Rebuild cached ASCII frames for this size, preserving aspect ratio
-                cache_size = size_key
+                cache_key = size_key
                 cached_ascii = []
                 cached_info = None
                 # Choose pixel mode
                 mode = pixel_mode
                 if mode == "auto":
                     # Prefer braille when reasonably sized terminal
-                    mode = "braille" if rows >= 6 and cols >= 10 else "half"
+                    mode = "braille" if avail_rows >= 6 and cols >= 10 else "half"
                 if mode == "braille":
                     canvas_w = cols * 2
-                    canvas_h = rows * 4
+                    canvas_h = avail_rows * 4
                     renderer = _braille_ascii
                 elif mode == "half":
                     canvas_w = cols
-                    canvas_h = rows * 2
+                    canvas_h = avail_rows * 2
                     renderer = _halfblock_ascii
                 else:  # full
                     canvas_w = cols
-                    canvas_h = rows
+                    canvas_h = avail_rows
                     renderer = _full_ascii
                 # Compute uniform scale to fit within terminal canvas preserving ratio
                 if fit_mode == "cover":
@@ -252,8 +255,8 @@ def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
                     canvas = Image.new('L', (canvas_w, canvas_h), color=255)
                     g = fr.convert('L').resize((scaled_w, scaled_h), Image.NEAREST)
                     canvas.paste(g, (x_off, y_off))
-                    cached_ascii.append(renderer(canvas, cols, rows))
-                cached_info = (scaled_w, scaled_h, x_off, y_off, mode)
+                    cached_ascii.append(renderer(canvas, cols, avail_rows))
+                cached_info = (scaled_w, scaled_h, x_off, y_off, mode, avail_rows)
                 # Adjust curses internal structures to new size
                 try:
                     curses.resizeterm(rows, cols)
@@ -262,14 +265,16 @@ def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
 
             stdscr.erase()
             if cached_ascii:
-                try:
-                    stdscr.addstr(0, 0, cached_ascii[idx])
-                except curses.error:
-                    # Ignore drawing errors on very small terminals
-                    pass
+                # Draw line-by-line to avoid bottom-right scroll issues
+                lines = cached_ascii[idx]
+                for r in range(min(len(lines), avail_rows)):
+                    try:
+                        stdscr.addnstr(r, 0, lines[r], cols)
+                    except curses.error:
+                        pass
             # Optional debug overlay (border + status line)
             if debug and cached_info is not None:
-                sw, sh, xo, yo, mode = cached_info
+                sw, sh, xo, yo, mode, avail_rows = cached_info
                 # Map pixel canvas coords to cell coords
                 if mode == "braille":
                     top = yo // 4
@@ -284,7 +289,7 @@ def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
                     scaled_rows = sh
                     left = xo
                 right = min(cols - 1, left + (sw // (2 if mode=="braille" else 1)) - 1)
-                bottom = min(rows - 1, top + scaled_rows - 1)
+                bottom = min(avail_rows - 1, top + scaled_rows - 1)
                 # Draw border
                 try:
                     if 0 <= top < rows:
