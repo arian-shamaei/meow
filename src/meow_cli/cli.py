@@ -3,6 +3,8 @@ import os
 import time
 import signal
 import curses
+import shutil
+import subprocess
 from PIL import Image, ImageSequence
 
 
@@ -144,6 +146,44 @@ def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
     cached_info = None  # (scaled_w, scaled_h, x_off, y_off)
     src_w, src_h = frames[0].size
 
+    def _detect_term_size():
+        # Try curses first
+        try:
+            r, c = stdscr.getmaxyx()
+            if r > 0 and c > 0:
+                return c, r
+        except Exception:
+            pass
+        # Env variables
+        try:
+            c = int(os.environ.get("COLUMNS", 0))
+            r = int(os.environ.get("LINES", 0))
+            if c > 0 and r > 0:
+                return c, r
+        except Exception:
+            pass
+        # shutil fallback
+        try:
+            ts = shutil.get_terminal_size(fallback=(80, 24))
+            return ts.columns, ts.lines
+        except Exception:
+            pass
+        # stty size
+        try:
+            out = subprocess.check_output(["stty", "size"], stderr=subprocess.DEVNULL)
+            r, c = map(int, out.split())
+            return c, r
+        except Exception:
+            pass
+        # tput cols/lines
+        try:
+            c = int(subprocess.check_output(["tput", "cols"]))
+            r = int(subprocess.check_output(["tput", "lines"]))
+            return c, r
+        except Exception:
+            pass
+        return 80, 24
+
     # Handle Ctrl+C gracefully
     running = True
 
@@ -166,6 +206,9 @@ def _tui(stdscr, *, debug=False, fit_mode="contain", pixel_mode="auto"):
             rows, cols = stdscr.getmaxyx()
             rows = max(1, rows)  # use all rows
             cols = max(1, cols)
+            if rows <= 1 or cols <= 1:
+                # Fallback detection if curses reports something tiny
+                cols, rows = _detect_term_size()
 
             size_key = (cols, rows)
             if size_key != cache_size:
