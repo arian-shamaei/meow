@@ -2,12 +2,8 @@ Meow meow meow meow meow meow meow meow meow meow meow? silly-catui meow meow me
 
 **Install**
 - Clone this repo, then install: `pip install .`
-- Or for development: `pip install -e .`
 
 **Usage**
-- Run: `meow`
-- It auto-fills your terminal and loops. Press Ctrl+C to exit.
+- meow
 
-Notes
-- If a `silly-cat.gif` is in your current directory, it will be used; otherwise the bundled GIF is used.
 
