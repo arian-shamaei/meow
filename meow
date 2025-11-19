@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+import sys
+import os
+import time
+import shutil
+import signal
+from PIL import Image, ImageSequence
+
+
+# ASCII ramp: from dark (space) to bright (dense)
+# ASCII ramp inverted: bright -> spaces, dark -> dense
+RAMP = "@%#*+=-:. "
+
+
+def to_ascii(img, cols, rows):
+    # Force fill: stretch to exactly terminal columns x rows
+    # Convert to grayscale then map each pixel to a char
+    if cols <= 0 or rows <= 0:
+        return ""
+    g = img.convert("L").resize((cols, rows), Image.BILINEAR)
+    px = g.load()
+    n = len(RAMP) - 1
+    lines = []
+    for y in range(rows):
+        line_chars = []
+        for x in range(cols):
+            v = px[x, y]
+            idx = int(v * n / 255)
+            line_chars.append(RAMP[idx])
+        lines.append("".join(line_chars))
+    return "\n".join(lines)
+
+
+def clear_and_home():
+    sys.stdout.write("\x1b[H\x1b[2J")
+
+
+def hide_cursor():
+    sys.stdout.write("\x1b[?25l")
+
+
+def show_cursor():
+    sys.stdout.write("\x1b[?25h")
+
+
+def main():
+    # Find the GIF: prefer local folder where command is run
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cwd, "silly-cat.gif"),
+        os.path.join(os.path.dirname(__file__), "silly-cat.gif"),
+    ]
+    gif_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not gif_path:
+        print("Error: silly-cat.gif not found in current folder.")
+        sys.exit(1)
+
+    try:
+        im = Image.open(gif_path)
+    except Exception as e:
+        print(f"Failed to open GIF: {e}")
+        sys.exit(1)
+
+    # Preload frames and durations to avoid decoder seeking cost per loop
+    frames = []
+    durations = []
+    for frame in ImageSequence.Iterator(im):
+        # Convert to RGB once to keep consistent mode
+        frames.append(frame.convert("RGB"))
+        dur_ms = frame.info.get("duration", 100)
+        # Cap zero durations to 40ms (~25fps) to avoid tight loops
+        durations.append(max(40, int(dur_ms)))
+
+    if not frames:
+        print("No frames found in GIF.")
+        sys.exit(1)
+
+    # Handle Ctrl+C cleanly
+    running = True
+
+    def handle_sigint(signum, frame):
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    try:
+        hide_cursor()
+        # Keep playing on repeat
+        idx = 0
+        while running:
+            cols, rows = shutil.get_terminal_size(fallback=(80, 24))
+            # Avoid scroll by reserving last row if needed
+            rows = max(1, rows - 1)
+
+            frame = frames[idx]
+            ascii_frame = to_ascii(frame, cols, rows)
+
+            clear_and_home()
+            sys.stdout.write(ascii_frame)
+            sys.stdout.flush()
+
+            # Sleep for frame duration
+            time.sleep(durations[idx] / 1000.0)
+
+            idx = (idx + 1) % len(frames)
+    finally:
+        show_cursor()
+        # Move cursor to bottom to leave terminal tidy
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()
