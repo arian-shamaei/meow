@@ -72,6 +72,7 @@ def _tui(stdscr):
     # Cache ascii frames per terminal size for smoothness
     cache_size = None
     cached_ascii = None
+    src_w, src_h = frames[0].size
 
     # Handle Ctrl+C gracefully
     running = True
@@ -98,13 +99,27 @@ def _tui(stdscr):
 
             size_key = (cols, rows)
             if size_key != cache_size:
-                # Rebuild cached ASCII frames for this size
+                # Rebuild cached ASCII frames for this size, preserving aspect ratio
                 cache_size = size_key
                 cached_ascii = []
-                target_h = rows * 2
+                target_canvas_h = rows * 2
+                # Compute uniform scale to fit within terminal canvas preserving ratio
+                scale = min(max(1, cols) / max(1, src_w), max(1, target_canvas_h) / max(1, src_h))
+                # Ensure at least 1x1 after scaling
+                scaled_w = max(1, int(src_w * scale))
+                scaled_h = max(1, int(src_h * scale))
+                # Clamp to canvas in case rounding overshoots
+                scaled_w = min(cols, scaled_w)
+                scaled_h = min(target_canvas_h, scaled_h)
+                x_off = (cols - scaled_w) // 2
+                y_off = (target_canvas_h - scaled_h) // 2
+
                 for fr in frames:
-                    g = fr.convert('L').resize((cols, target_h), Image.BILINEAR)
-                    cached_ascii.append(_halfblock_ascii(g, cols, rows))
+                    # Create white canvas so letterboxed areas render as blanks
+                    canvas = Image.new('L', (cols, target_canvas_h), color=255)
+                    g = fr.convert('L').resize((scaled_w, scaled_h), Image.BILINEAR)
+                    canvas.paste(g, (x_off, y_off))
+                    cached_ascii.append(_halfblock_ascii(canvas, cols, rows))
                 # Adjust curses internal structures to new size
                 try:
                     curses.resizeterm(rows, cols)
