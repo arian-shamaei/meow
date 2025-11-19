@@ -1,0 +1,2 @@
+[console_scripts]
+meow = meow_cli.cli:main

@@ -6,8 +6,8 @@ import signal
 from PIL import Image, ImageSequence
 
 
-# Inverted ASCII ramp: bright -> spaces, dark -> dense (no '.')
-RAMP = "@%#*+=-: "
+# Inverted ASCII ramp: bright -> spaces, dark -> dense
+RAMP = "@%#*+=-:. "
 
 
 def to_ascii(img, cols, rows):
@@ -92,3 +92,4 @@ def main():
         show_cursor()
         sys.stdout.write("\n")
         sys.stdout.flush()
+

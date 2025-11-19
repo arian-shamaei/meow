@@ -8,8 +8,8 @@ from PIL import Image, ImageSequence
 
 
 # ASCII ramp: from dark (space) to bright (dense)
-# ASCII ramp inverted: bright -> spaces, dark -> dense
-RAMP = "@%#*+=-:. "
+# ASCII ramp inverted: bright -> spaces, dark -> dense (no '.')
+RAMP = "@%#*+=-: "
 
 
 def to_ascii(img, cols, rows):

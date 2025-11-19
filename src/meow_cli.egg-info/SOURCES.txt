@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+src/meow_cli/__init__.py
+src/meow_cli/cli.py
+src/meow_cli/silly-cat.gif
+src/meow_cli.egg-info/PKG-INFO
+src/meow_cli.egg-info/SOURCES.txt
+src/meow_cli.egg-info/dependency_links.txt
+src/meow_cli.egg-info/entry_points.txt
+src/meow_cli.egg-info/requires.txt
+src/meow_cli.egg-info/top_level.txt

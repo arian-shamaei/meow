@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: meow-cli
+Version: 0.1.0
+Summary: Play an ASCII GIF in your terminal (meow)
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: Pillow>=9.0
+
+Meow meow meow meow meow meow meow meow meow meow meow? silly-catui meow meow meow meow sillycat meow meow meow.  Meow meow meow meow meow meow meow meow sillyness meow 10x!
+
+**Install**
+- Clone this repo, then install: `pip install .`
+
+**Usage**
+- meow
+
+

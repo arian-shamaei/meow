@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 from PIL import Image, ImageSequence
 
-# Inverted ramp so black/white appear flipped in output
-RAMP = "@%#*+=-:. "
+# Inverted ramp so black/white appear flipped in output (no '.')
+RAMP = "@%#*+=-: "
 
 
 def to_ascii(img, cols, rows):
