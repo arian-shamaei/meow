@@ -5,6 +5,7 @@ import signal
 import curses
 import shutil
 import subprocess
+import random
 from PIL import Image, ImageSequence
 
 
@@ -156,6 +157,44 @@ THEMES = {
         "bg": (_hsl_to_rgb1000(0, 0, 0.0), _hsl_to_rgb1000(0, 0, 0.0)),
     },
 }
+
+
+# ── Random theme generator ────────────────────────────────────────────
+
+def _generate_random_theme(fg_gradient=False, bg_gradient=False):
+    """Generate a theme with random colours.
+
+    fg_gradient / bg_gradient control whether each layer uses a
+    two-colour gradient or a single solid colour.
+    """
+    fg_hue = random.uniform(0, 360)
+    fg_sat = random.uniform(0.7, 1.0)
+    fg_lit = random.uniform(0.45, 0.65)
+    fg_start = _hsl_to_rgb1000(fg_hue, fg_sat, fg_lit)
+    if fg_gradient:
+        fg_hue2 = (fg_hue + random.uniform(40, 180)) % 360
+        fg_end = _hsl_to_rgb1000(fg_hue2, random.uniform(0.7, 1.0),
+                                 random.uniform(0.45, 0.65))
+    else:
+        fg_end = fg_start
+
+    bg_hue = random.uniform(0, 360)
+    bg_sat = random.uniform(0.3, 0.7)
+    bg_lit = random.uniform(0.03, 0.08)
+    bg_start = _hsl_to_rgb1000(bg_hue, bg_sat, bg_lit)
+    if bg_gradient:
+        bg_hue2 = (bg_hue + random.uniform(20, 90)) % 360
+        bg_end = _hsl_to_rgb1000(bg_hue2, random.uniform(0.3, 0.7),
+                                 random.uniform(0.03, 0.08))
+    else:
+        bg_end = bg_start
+
+    return {
+        "desc": "Randomly generated",
+        "harmony": "random",
+        "fg": (fg_start, fg_end),
+        "bg": (bg_start, bg_end),
+    }
 
 
 # ── Theme colour-pair initialisation ──────────────────────────────────
@@ -554,6 +593,8 @@ def main():
     pixel_mode = "auto"
     theme = "classic"
     list_themes = False
+    random_fg_gradient = False
+    random_bg_gradient = False
 
     for arg in sys.argv[1:]:
         if arg in ("-d", "--debug"):
@@ -568,8 +609,12 @@ def main():
                 pixel_mode = val
         elif arg.startswith("--theme="):
             val = arg.split("=", 1)[1].strip().lower()
-            if val in THEMES:
+            if val in THEMES or val == "random":
                 theme = val
+        elif arg == "--random-fg-gradient":
+            random_fg_gradient = True
+        elif arg == "--random-bg-gradient":
+            random_bg_gradient = True
         elif arg == "--list-themes":
             list_themes = True
 
@@ -581,8 +626,18 @@ def main():
             style = "gradient" if (fg_s != fg_e or bg_s != bg_e) else "solid"
             print(f"  {name:<12} {info['desc']}")
             print(f"  {'':<12} harmony: {info['harmony']}  |  style: {style}")
+        print(f"  {'random':<12} Random colours each launch")
+        print(f"  {'':<12} harmony: random  |  style: solid/gradient")
         print(f"\nUsage: meow --theme=<name>")
+        print(f"       meow --theme=random [--random-fg-gradient] [--random-bg-gradient]")
         return
+
+    # Generate random theme on the fly when requested
+    if theme == "random":
+        THEMES["random"] = _generate_random_theme(
+            fg_gradient=random_fg_gradient,
+            bg_gradient=random_bg_gradient,
+        )
 
     curses.wrapper(lambda stdscr: _tui(
         stdscr, debug=debug, fit_mode=fit_mode,
