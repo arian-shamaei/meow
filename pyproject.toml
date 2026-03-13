@@ -1,7 +1,7 @@
 [project]
 name = "meow-cli"
-version = "0.1.0"
-description = "Play an ASCII GIF in your terminal (meow)"
+version = "0.2.0"
+description = "Play a colourful ASCII GIF in your terminal (meow)"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
