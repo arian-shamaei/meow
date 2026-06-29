@@ -30,6 +30,11 @@
 
 #include "meow_frames.h"
 
+#if defined(__unix__) || defined(__APPLE__)
+#  include <sys/ioctl.h>
+#  include <unistd.h>
+#endif
+
 /* ---- portable millisecond sleep ----------------------------------- */
 #if defined(_WIN32)
 #  include <windows.h>
@@ -119,16 +124,135 @@ static int env_int(const char *name)
     return atoi(s);
 }
 
+/* Ask the OS for the real terminal size. Returns 1 on success. */
+static int query_term_size(int *cols, int *rows)
+{
+#if defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE hh = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hh != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(hh, &csbi)) {
+        int c = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        int r = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        if (c > 0 && r > 0) { *cols = c; *rows = r; return 1; }
+    }
+    return 0;
+#elif defined(__unix__) || defined(__APPLE__)
+    struct winsize ws;
+    if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0) {
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+        return 1;
+    }
+    return 0;
+#else
+    (void)cols; (void)rows;
+    return 0;            /* no portable way -> caller falls back */
+#endif
+}
+
+/* Effective terminal size: forced args win, else ask the OS, else the
+ * COLUMNS/LINES env vars, else a sane default. */
+static void get_size(int force_w, int force_h, int *cols, int *rows)
+{
+    int c = 0, r = 0;
+    if (!query_term_size(&c, &r)) {
+        c = env_int("COLUMNS");
+        r = env_int("LINES");
+    }
+    if (c < 1) c = 80;
+    if (r < 1) r = 24;
+    *cols = force_w ? force_w : c;
+    *rows = force_h ? force_h : r;
+}
+
+/* Any frame level >= this counts as "ink" for the braille silhouette.
+ * The frames are quantised 0 (background) .. MEOW_LEVELS-1 (darkest); a low
+ * cut keeps thin lines, matching the cleaned-up original look. */
+#define MEOW_INK 2
+
+/* Braille dot bit per (row 0..3, col 0..1), Unicode U+28xx layout. */
+static const unsigned char MEOW_DOT[4][2] = {
+    { 0x01, 0x08 },
+    { 0x02, 0x10 },
+    { 0x04, 0x20 },
+    { 0x40, 0x80 }
+};
+
+/* Write one cat row (image row y of h) as glyph bytes; return new ptr. */
+static char *render_row(char *p, int y, int w, int h, int braille,
+                        const unsigned char *frame, const char *ramp)
+{
+    int x;
+    if (braille) {
+        for (x = 0; x < w; x++) {
+            int bits = 0, dy, dx;
+            for (dy = 0; dy < 4; dy++) {
+                int sy = (int)((long)(y * 4 + dy) * MEOW_SIZE / (h * 4));
+                const unsigned char *srow = frame + (long)sy * MEOW_SIZE;
+                for (dx = 0; dx < 2; dx++) {
+                    int sx = (int)((long)(x * 2 + dx) * MEOW_SIZE / (w * 2));
+                    if (srow[sx] >= MEOW_INK) bits |= MEOW_DOT[dy][dx];
+                }
+            }
+            if (bits == 0) {
+                *p++ = ' ';
+            } else {
+                *p++ = (char)0xE2;
+                *p++ = (char)(0xA0 | (bits >> 6));
+                *p++ = (char)(0x80 | (bits & 0x3F));
+            }
+        }
+    } else {
+        int sy = (int)((long)y * MEOW_SIZE / h);
+        const unsigned char *srow = frame + (long)sy * MEOW_SIZE;
+        for (x = 0; x < w; x++) {
+            int sx = (int)((long)x * MEOW_SIZE / w);
+            unsigned char lv = srow[sx];
+            *p++ = ramp[lv < MEOW_LEVELS ? lv : MEOW_LEVELS - 1];
+        }
+    }
+    return p;
+}
+
+/* Capability check: does this environment support UTF-8 (and therefore the
+ * sharper braille cat)? We can't read "firmware" directly, so we use the
+ * locale -- the portable proxy every Unix-ish system exposes. LC_ALL beats
+ * LC_CTYPE beats LANG; the first one that's set decides. No locale at all
+ * (typical of old/bare systems) -> assume limited -> ASCII. */
+static int supports_unicode(void)
+{
+    const char *names[3];
+    int i, j;
+    names[0] = "LC_ALL";
+    names[1] = "LC_CTYPE";
+    names[2] = "LANG";
+    for (i = 0; i < 3; i++) {
+        const char *v = getenv(names[i]);
+        if (!v || !v[0]) continue;
+        for (j = 0; v[j] && v[j + 1] && v[j + 2]; j++) {
+            if ((v[j] == 'u' || v[j] == 'U') &&
+                (v[j + 1] == 't' || v[j + 1] == 'T') &&
+                (v[j + 2] == 'f' || v[j + 2] == 'F')) {
+                return 1;            /* "utf" found -> UTF-8 */
+            }
+        }
+        return 0;                    /* locale set but not UTF-8 */
+    }
+    return 0;                        /* no locale -> assume ASCII */
+}
+
 int main(int argc, char **argv)
 {
     static unsigned char frame[MEOW_SIZE * MEOW_SIZE];
     const char *ramp = MEOW_RAMP;
     char *line;
+    size_t line_cap;
     int force_w = 0, force_h = 0;
     int loops = 0;          /* 0 = forever */
     int played = 0;
     int term_cols, term_rows, w, h;
-    int i, x, y, f;
+    int i, y, f;
+    int braille = -1;       /* -1 = auto-detect, 0 = ascii, 1 = braille */
 
     /* ---- args ---- */
     for (i = 1; i < argc; i++) {
@@ -138,30 +262,43 @@ int main(int argc, char **argv)
             loops = 1;
         } else if (strcmp(argv[i], "--loops") == 0 && i + 1 < argc) {
             loops = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--ascii") == 0) {
+            braille = 0;
+        } else if (strcmp(argv[i], "--unicode") == 0 ||
+                   strcmp(argv[i], "--braille") == 0) {
+            braille = 1;
+        } else if (strcmp(argv[i], "--auto") == 0) {
+            braille = -1;
         } else if (argv[i][0] >= '0' && argv[i][0] <= '9') {
             if (!force_w) force_w = atoi(argv[i]);
             else if (!force_h) force_h = atoi(argv[i]);
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            printf("usage: meow [--loops N] [--once] [--scroll] [WIDTH HEIGHT]\n");
+            printf("usage: meow [--loops N] [--once] [--scroll]"
+                   " [--ascii|--unicode] [WIDTH HEIGHT]\n");
             return 0;
         }
     }
 
-    /* ---- output size ---- */
-    term_cols = force_w ? force_w : env_int("COLUMNS");
-    term_rows = force_h ? force_h : env_int("LINES");
-    if (force_w && force_h) {
-        w = force_w;
-        h = force_h;
-    } else {
-        pick_size(term_cols, term_rows, &w, &h);
+    /* Choose the cat the machine can show: braille where UTF-8 is
+     * supported (the cleaned-up original look), ASCII everywhere else. */
+    if (braille < 0) braille = supports_unicode();
+
+    /* ---- initial size (real terminal, auto-scaled) ---- */
+    {
+        int cc, rr;
+        get_size(force_w, force_h, &cc, &rr);
+        term_cols = cc;
+        term_rows = rr;
+        if (force_w && force_h) { w = force_w; h = force_h; }
+        else pick_size(cc, rr, &w, &h);
     }
     if (w > MEOW_SIZE * 4) w = MEOW_SIZE * 4;   /* sanity cap */
     if (h > MEOW_SIZE * 4) h = MEOW_SIZE * 4;
 
-    line = (char *)malloc((size_t)w + 1);
+    /* line holds left padding + a full row of braille (3 bytes/cell) */
+    line_cap = (size_t)term_cols * 4 + 16;
+    line = (char *)malloc(line_cap);
     if (!line) return 1;
-    line[w] = '\0';
 
     signal(SIGINT, on_sigint);
 
@@ -173,22 +310,48 @@ int main(int argc, char **argv)
     /* ---- animation loop ---- */
     while (g_running) {
         for (f = 0; f < MEOW_NFRAMES && g_running; f++) {
+            int top_pad, left_pad, sr, nrows;
             decode_frame(f, frame);
-            if (g_use_cursor) {
-                fputs("\033[H", stdout);      /* cursor home */
-            } else {
-                fputc('\f', stdout);          /* form feed (teletype) */
-            }
-            for (y = 0; y < h; y++) {
-                int sy = (int)((long)y * MEOW_SIZE / h);
-                const unsigned char *srow = frame + (long)sy * MEOW_SIZE;
-                for (x = 0; x < w; x++) {
-                    int sx = (int)((long)x * MEOW_SIZE / w);
-                    unsigned char lv = srow[sx];
-                    line[x] = ramp[lv < MEOW_LEVELS ? lv : MEOW_LEVELS - 1];
+
+            /* live re-scale on terminal resize (skip if size forced) */
+            if (g_use_cursor && !(force_w && force_h)) {
+                int cc, rr;
+                get_size(force_w, force_h, &cc, &rr);
+                if (cc != term_cols || rr != term_rows) {
+                    term_cols = cc;
+                    term_rows = rr;
+                    pick_size(cc, rr, &w, &h);
+                    if (w > MEOW_SIZE * 4) w = MEOW_SIZE * 4;
+                    if (h > MEOW_SIZE * 4) h = MEOW_SIZE * 4;
+                    if ((size_t)cc * 4 + 16 > line_cap) {
+                        char *nl = (char *)realloc(line, (size_t)cc * 4 + 16);
+                        if (nl) { line = nl; line_cap = (size_t)cc * 4 + 16; }
+                    }
+                    fputs("\033[2J", stdout);          /* clear on resize */
                 }
+            }
+
+            top_pad = g_use_cursor ? (term_rows - h) / 2 : 0;
+            left_pad = g_use_cursor ? (term_cols - w) / 2 : 0;
+            if (top_pad < 0) top_pad = 0;
+            if (left_pad < 0) left_pad = 0;
+            nrows = g_use_cursor ? term_rows : h;
+
+            if (g_use_cursor) fputs("\033[H", stdout);   /* cursor home */
+            else fputc('\f', stdout);                    /* form feed */
+
+            for (sr = 0; sr < nrows; sr++) {
+                char *p = line;
+                y = sr - top_pad;
+                if (y >= 0 && y < h) {
+                    int lp;
+                    for (lp = 0; lp < left_pad; lp++) *p++ = ' ';
+                    p = render_row(p, y, w, h, braille, frame, ramp);
+                }
+                *p = '\0';
                 fputs(line, stdout);
-                fputc('\n', stdout);
+                if (g_use_cursor) fputs("\033[K", stdout);   /* clear to EOL */
+                if (sr < nrows - 1 || !g_use_cursor) fputc('\n', stdout);
             }
             fflush(stdout);
             sleep_ms(meow_duration_ms[f]);
