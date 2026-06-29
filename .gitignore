@@ -1,13 +1,8 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
-.pytest_cache/
+# built binaries (source + embedded frames are committed; binaries are not)
+meow
+meow-*
+c/meow
+*.o
+*.obj
+*.exe
 .DS_Store
-ascii_frames/
-*.swp
-*.swo
-env/
-venv/
-.venv/
