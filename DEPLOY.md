@@ -45,6 +45,34 @@ destroy work, so the deploy copies over SSH into its own directory
 
 Override with `MEOW_HOST` / `MEOW_REMOTE` if either moves.
 
+## The installer stick (`avr/meow_installer`)
+
+A different, no-gate use of the same board: on plug-in it acts as a USB HID
+keyboard and types the keystrokes to open a terminal and run the meow
+installer, which adds meow to PATH. This is a BadUSB/Rubber-Ducky technique
+used for its benign purpose — auto-installing a harmless program on machines
+you own. It contains no stealth.
+
+Because a keyboard can't detect the host OS or fetch anything itself, two
+compile-time settings:
+
+- `TARGET_OS` — `OS_WIN` (Win+R → powershell), `OS_MAC` (Cmd+Space → Terminal),
+  or `OS_LINUX` (Ctrl+Alt+T). One stick targets one OS.
+- `INSTALL_CMD` — defaults to fetching the installer from the release:
+  - Windows: `iwr -useb https://github.com/arian-shamaei/meow/releases/latest/download/install.ps1 | iex`
+  - Mac/Linux: `curl -fsSL .../install.sh | sh`
+
+The install source is the **prebuilt release** at
+`github.com/arian-shamaei/meow` (a repo distinct from the `silly-catui` name
+collision), so no compiler is needed on the target. Proven end to end on
+`meow`: wiped meow, plugged in the board, and it reinstalled meow onto PATH.
+
+Flash it: `MEOW_SKETCH=meow_installer` is not wired into deploy.sh; upload
+directly with `arduino-cli upload -p <port> --fqbn arduino:avr:micro avr/meow_installer`.
+
+Caveat: HID sends US-layout scancodes, so the typed command's punctuation
+(`/ : | .`) assumes a US keymap on the target.
+
 ## Output
 
 The cat renders as 24x12 shaded ASCII over USB serial at 115200 baud, one

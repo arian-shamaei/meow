@@ -32,11 +32,14 @@
 /* The install one-liner, per OS. Each fetches a hosted installer and runs it;
  * install.sh / install.ps1 add meow to PATH themselves. Set MEOW_URL to wherever
  * you host them (the board cannot fetch on its own, so the command must). */
+#ifndef MEOW_URL
+#define MEOW_URL "https://github.com/arian-shamaei/meow/releases/latest/download"
+#endif
 #ifndef INSTALL_CMD
 #  if TARGET_OS == OS_WIN
-#    define INSTALL_CMD "iwr -useb https://MEOW_URL/install.ps1 | iex"
+#    define INSTALL_CMD "iwr -useb " MEOW_URL "/install.ps1 | iex"
 #  else
-#    define INSTALL_CMD "curl -fsSL https://MEOW_URL/install.sh | sh"
+#    define INSTALL_CMD "curl -fsSL " MEOW_URL "/install.sh | sh"
 #  endif
 #endif
 
