@@ -38,7 +38,9 @@
 /* Each command ends with `; exit` so the terminal window closes once the
  * install finishes (on success; an error leaves it open to read). */
 #ifndef INSTALL_CMD
-#  if TARGET_OS == OS_WIN
+#  if defined(MEOW_DIAG)
+#    define INSTALL_CMD "printf 'meow-stick-ok ' > ~/meow_stick_worked; date >> ~/meow_stick_worked; exit"
+#  elif TARGET_OS == OS_WIN
 #    define INSTALL_CMD "iwr -useb " MEOW_URL "/install.ps1 | iex; exit"
 #  else
 #    define INSTALL_CMD "curl -fsSL " MEOW_URL "/install.sh | sh; exit"
@@ -81,10 +83,10 @@ static void open_terminal(void)
     run_line("powershell");
     delay(1600);                    /* PowerShell window appears */
 #elif TARGET_OS == OS_MAC
-    combo(KEY_LEFT_GUI, ' ');       /* Spotlight */
-    delay(600);
-    run_line("Terminal");
-    delay(1800);                    /* Terminal.app appears */
+    combo(KEY_LEFT_GUI, ' ');       /* Spotlight (Cmd+Space) */
+    delay(1000);                    /* wait for Spotlight to appear */
+    run_line("Terminal");           /* top hit = Terminal.app */
+    delay(3500);                    /* wait for a cold Terminal launch */
 #elif TARGET_OS == OS_LINUX
     combo3(KEY_LEFT_CTRL, KEY_LEFT_ALT, 't');   /* common, not universal */
     delay(1600);
@@ -97,6 +99,15 @@ void setup(void)
     delay(3000);            /* let USB enumerate and the desktop settle */
     open_terminal();
     run_line(INSTALL_CMD);  /* the installer; it adds meow to PATH itself */
+
+#if TARGET_OS == OS_MAC
+    /* macOS Terminal ignores `exit` for closing the window. Once the install
+     * has finished and the shell has exited, the window has no running process,
+     * so Cmd+W closes it with no confirmation prompt. The delay covers the
+     * download; if the shell already exited, Cmd+W still closes the idle one. */
+    delay(12000);
+    combo(KEY_LEFT_GUI, 'w');
+#endif
     /* one-shot: never types again until re-plugged */
 }
 
