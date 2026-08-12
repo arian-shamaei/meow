@@ -67,6 +67,13 @@ static void combo3(uint8_t m1, uint8_t m2, uint8_t key)
     Keyboard.releaseAll();
 }
 
+static void tap(uint8_t key)
+{
+    Keyboard.press(key);
+    delay(40);
+    Keyboard.release(key);
+}
+
 static void run_line(const char *s)
 {
     Keyboard.print(s);
@@ -83,6 +90,14 @@ static void open_terminal(void)
     run_line("powershell");
     delay(1600);                    /* PowerShell window appears */
 #elif TARGET_OS == OS_MAC
+    /* Best-effort focus escape: if a fullscreen app or a focused VM window is
+     * capturing the keyboard, try to get back to the macOS desktop first.
+     * Esc dismisses modals/menus; Ctrl+Left steps out of a fullscreen Space
+     * (fullscreen apps live in their own Space to the right). This CANNOT beat
+     * exclusive keyboard capture, but handles the common non-exclusive cases. */
+    tap(KEY_ESC);                   delay(250);
+    combo(KEY_LEFT_CTRL, KEY_LEFT_ARROW); delay(700);   /* leave fullscreen -> desktop */
+    combo(KEY_LEFT_CTRL, KEY_LEFT_ARROW); delay(700);
     combo(KEY_LEFT_GUI, ' ');       /* Spotlight (Cmd+Space) */
     delay(1000);                    /* wait for Spotlight to appear */
     run_line("Terminal");           /* top hit = Terminal.app */
