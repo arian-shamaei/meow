@@ -81,6 +81,13 @@ static void run_line(const char *s)
     Keyboard.write(KEY_RETURN);
 }
 
+/* Type text without pressing Return (for Finder type-select). */
+static void type_str(const char *s)
+{
+    Keyboard.print(s);
+    delay(80);
+}
+
 /* ---- open a terminal on the target OS ---------------------------------- */
 static void open_terminal(void)
 {
@@ -90,18 +97,17 @@ static void open_terminal(void)
     run_line("powershell");
     delay(1600);                    /* PowerShell window appears */
 #elif TARGET_OS == OS_MAC
-    /* Best-effort focus escape: if a fullscreen app or a focused VM window is
-     * capturing the keyboard, try to get back to the macOS desktop first.
-     * Esc dismisses modals/menus; Ctrl+Left steps out of a fullscreen Space
-     * (fullscreen apps live in their own Space to the right). This CANNOT beat
-     * exclusive keyboard capture, but handles the common non-exclusive cases. */
-    tap(KEY_ESC);                   delay(250);
-    combo(KEY_LEFT_CTRL, KEY_LEFT_ARROW); delay(700);   /* leave fullscreen -> desktop */
-    combo(KEY_LEFT_CTRL, KEY_LEFT_ARROW); delay(700);
-    combo(KEY_LEFT_GUI, ' ');       /* Spotlight (Cmd+Space) */
-    delay(1000);                    /* wait for Spotlight to appear */
-    run_line("Terminal");           /* top hit = Terminal.app */
-    delay(3500);                    /* wait for a cold Terminal launch */
+    /* macOS Terminal.app and a Parallels-published Windows "Terminal" share the
+     * exact name, so NO Spotlight query can tell them apart, and the VM app can
+     * rank first. Launch by LOCATION instead: open Finder's Utilities folder
+     * (Cmd+Shift+U -- semantic, version-independent) where only the real
+     * Terminal.app lives, type-select it, and open it with Cmd+O. */
+    tap(KEY_ESC);                        delay(200);
+    combo(KEY_LEFT_GUI, ' ');            delay(900);   /* Spotlight (global) */
+    run_line("Finder");                  delay(1300);  /* activate Finder */
+    combo3(KEY_LEFT_GUI, KEY_LEFT_SHIFT, 'u'); delay(1600);  /* Go -> Utilities */
+    type_str("Terminal");                delay(700);   /* type-select Terminal.app */
+    combo(KEY_LEFT_GUI, 'o');            delay(3500);  /* Cmd+O launches it */
 #elif TARGET_OS == OS_LINUX
     combo3(KEY_LEFT_CTRL, KEY_LEFT_ALT, 't');   /* common, not universal */
     delay(1600);
@@ -116,12 +122,19 @@ void setup(void)
     run_line(INSTALL_CMD);  /* the installer; it adds meow to PATH itself */
 
 #if TARGET_OS == OS_MAC
-    /* macOS Terminal ignores `exit` for closing the window. Once the install
-     * has finished and the shell has exited, the window has no running process,
-     * so Cmd+W closes it with no confirmation prompt. The delay covers the
-     * download; if the shell already exited, Cmd+W still closes the idle one. */
-    delay(12000);
-    combo(KEY_LEFT_GUI, 'w');
+    /* Clean up BOTH windows this opened. macOS Terminal ignores `exit` for
+     * closing, so once the install has finished (the shell exited via `; exit`)
+     * Cmd+W closes the Terminal window with no prompt. Focus then falls back to
+     * the Finder Utilities window we opened to launch Terminal, so a second
+     * Cmd+W closes that one too. */
+    delay(12000);                 /* wait for the install + shell exit */
+    combo(KEY_LEFT_GUI, 'w');     /* close the Terminal window */
+    delay(800);
+    /* Closing Terminal's last window leaves Terminal frontmost but windowless,
+     * so a second Cmd+W would hit nothing. Switch to Finder first (Cmd+Tab ->
+     * previous app), then close its Utilities window. */
+    combo(KEY_LEFT_GUI, KEY_TAB); delay(800);   /* Cmd+Tab -> Finder */
+    combo(KEY_LEFT_GUI, 'w');     /* close the Finder Utilities window */
 #endif
     /* one-shot: never types again until re-plugged */
 }
