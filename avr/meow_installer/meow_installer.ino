@@ -35,11 +35,13 @@
 #ifndef MEOW_URL
 #define MEOW_URL "https://github.com/arian-shamaei/meow/releases/latest/download"
 #endif
+/* Each command ends with `; exit` so the terminal window closes once the
+ * install finishes (on success; an error leaves it open to read). */
 #ifndef INSTALL_CMD
 #  if TARGET_OS == OS_WIN
-#    define INSTALL_CMD "iwr -useb " MEOW_URL "/install.ps1 | iex"
+#    define INSTALL_CMD "iwr -useb " MEOW_URL "/install.ps1 | iex; exit"
 #  else
-#    define INSTALL_CMD "curl -fsSL " MEOW_URL "/install.sh | sh"
+#    define INSTALL_CMD "curl -fsSL " MEOW_URL "/install.sh | sh; exit"
 #  endif
 #endif
 

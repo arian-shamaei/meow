@@ -43,6 +43,11 @@ static void sleep_ms(unsigned ms) { Sleep(ms); }
  * harmless no-op (returns failure) on older consoles -- use --scroll there. */
 static void enable_vt(void)
 {
+    /* Make the console emit UTF-8, so the braille cat renders instead of
+     * mojibake. Without this, Windows uses code page 437/1252 and the
+     * multibyte braille glyphs come out garbled -- which is why the Windows
+     * build otherwise falls back to the plainer ASCII cat. */
+    SetConsoleOutputCP(CP_UTF8);
 #  ifdef ENABLE_VIRTUAL_TERMINAL_PROCESSING
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode = 0;
@@ -221,6 +226,12 @@ static char *render_row(char *p, int y, int w, int h, int braille,
  * (typical of old/bare systems) -> assume limited -> ASCII. */
 static int supports_unicode(void)
 {
+#if defined(_WIN32)
+    /* Windows has no LANG/LC_* locale to read, but the Win10+ console renders
+     * UTF-8 braille fine once enable_vt() sets the output code page. Default to
+     * the braille cat here so Windows matches macOS/Linux; --ascii overrides. */
+    return 1;
+#else
     const char *names[3];
     int i, j;
     names[0] = "LC_ALL";
@@ -239,6 +250,7 @@ static int supports_unicode(void)
         return 0;                    /* locale set but not UTF-8 */
     }
     return 0;                        /* no locale -> assume ASCII */
+#endif
 }
 
 /* ---- e-ink diff rendering ------------------------------------------ */
