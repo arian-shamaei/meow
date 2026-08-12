@@ -86,6 +86,17 @@ void setup(void)
     Keyboard.begin();
     delay(3000);           /* enumeration completes here; 0xEE seen if Windows */
 
+#ifdef MEOW_PROBE
+    /* Probe mode: report the live detection flag forever and NEVER install, so
+     * the 0xEE sniffer can be tested by sending an emulated Windows descriptor
+     * request over USB and watching the flag flip. */
+    for (;;) {
+        Serial.print(F("meow-auto OS="));
+        Serial.println(osdetect.windows ? F("WINDOWS") : F("MAC/other"));
+        delay(300);
+    }
+#endif
+
     /* telemetry so the detection is verifiable over serial before it fires */
     for (uint8_t i = 0; i < 5; i++) {
         Serial.print(F("meow-auto OS="));
