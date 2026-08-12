@@ -107,10 +107,16 @@ void setup(void)
     delay(3000);           /* enumeration completes here; 0xEE seen if Windows */
 
 #ifdef MEOW_PROBE
-    /* Probe mode: report the live detection forever and NEVER install, so the
-     * sniffer can be tested by emulating each OS's descriptor request over USB
-     * and watching the flag change. */
-    for (;;) { Serial.print(F("meow-auto OS=")); Serial.println(detected_os()); delay(300); }
+    /* Probe mode: report the RAW flags forever and NEVER install. Raw (not just
+     * the winner) so a real-Linux test through WSL/usbipd is visible even when
+     * Windows enumerated the device first and set the Windows flag: watch the
+     * LINUX flag flip 0->1 when the Linux kernel enumerates it. */
+    for (;;) {
+        Serial.print(F("meow-auto WIN=")); Serial.print(osdetect.windows);
+        Serial.print(F(" LINUX="));        Serial.print(osdetect.linux);
+        Serial.print(F(" -> "));            Serial.println(detected_os());
+        delay(300);
+    }
 #endif
 
     /* telemetry so the detection is verifiable over serial before it fires */
