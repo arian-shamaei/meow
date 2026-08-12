@@ -241,6 +241,63 @@ static int supports_unicode(void)
     return 0;                        /* no locale -> assume ASCII */
 }
 
+/* ---- e-ink diff rendering ------------------------------------------ */
+/* E-paper panels refresh whole damaged regions; rewriting the full frame
+ * every tick forces a full-screen refresh and the panel falls behind.
+ * --eink keeps the previous frame and repaints only the changed span of
+ * each row, so the damaged region is a few small rectangles instead. */
+
+/* Bytes in the UTF-8 char starting at s. */
+static int u8len(const char *s)
+{
+    unsigned char c = (unsigned char)*s;
+    if (c < 0x80) return 1;
+    if ((c >> 5) == 6) return 2;
+    if ((c >> 4) == 14) return 3;
+    if ((c >> 3) == 30) return 4;
+    return 1;
+}
+
+/* Two changed cells separated by fewer than this many unchanged cells are
+ * repainted as one span (an escape sequence costs more than a small gap). */
+#define EINK_SPAN_GAP 8
+
+/* Repaint every changed span of row `row`: walk previous (a) and current
+ * (b) char-by-char, coalesce nearby differences, emit one cursor-move +
+ * write per span. Rows are equal char width by construction. */
+static void emit_row_spans(const char *a, const char *b, int row)
+{
+    size_t ia = 0, ib = 0;
+    int col = 0, gap = 0;
+    int span_col = -1;
+    size_t span_b0 = 0, span_bend = 0;
+    while (a[ia] && b[ib]) {
+        int la = u8len(a + ia), lb = u8len(b + ib);
+        int same = (la == lb) && memcmp(a + ia, b + ib, (size_t)la) == 0;
+        if (!same) {
+            if (span_col < 0) { span_col = col; span_b0 = ib; }
+            span_bend = ib + (size_t)lb;
+            gap = 0;
+        } else if (span_col >= 0 && ++gap >= EINK_SPAN_GAP) {
+            printf("\033[%d;%dH", row + 1, span_col + 1);
+            fwrite(b + span_b0, 1, span_bend - span_b0, stdout);
+            span_col = -1;
+            gap = 0;
+        }
+        ia += (size_t)la;
+        ib += (size_t)lb;
+        col++;
+    }
+    if (b[ib]) {                       /* current row longer than previous */
+        if (span_col < 0) { span_col = col; span_b0 = ib; }
+        span_bend = ib + strlen(b + ib);
+    }
+    if (span_col >= 0) {
+        printf("\033[%d;%dH", row + 1, span_col + 1);
+        fwrite(b + span_b0, 1, span_bend - span_b0, stdout);
+    }
+}
+
 int main(int argc, char **argv)
 {
     static unsigned char frame[MEOW_SIZE * MEOW_SIZE];
@@ -253,6 +310,10 @@ int main(int argc, char **argv)
     int term_cols, term_rows, w, h;
     int i, y, f;
     int braille = -1;       /* -1 = auto-detect, 0 = ascii, 1 = braille */
+    int eink = 0;           /* --eink: repaint only changed row spans */
+    int fps_cap = 0;        /* --fps N: floor each frame at 1000/N ms */
+    char **prev = (char **)0;
+    int prev_rows = 0, prev_valid = 0;
 
     /* ---- args ---- */
     for (i = 1; i < argc; i++) {
@@ -269,12 +330,17 @@ int main(int argc, char **argv)
             braille = 1;
         } else if (strcmp(argv[i], "--auto") == 0) {
             braille = -1;
+        } else if (strcmp(argv[i], "--eink") == 0) {
+            eink = 1;
+            g_use_cursor = 1;
+        } else if (strcmp(argv[i], "--fps") == 0 && i + 1 < argc) {
+            fps_cap = atoi(argv[++i]);
         } else if (argv[i][0] >= '0' && argv[i][0] <= '9') {
             if (!force_w) force_w = atoi(argv[i]);
             else if (!force_h) force_h = atoi(argv[i]);
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            printf("usage: meow [--loops N] [--once] [--scroll]"
-                   " [--ascii|--unicode] [WIDTH HEIGHT]\n");
+            printf("usage: meow [--loops N] [--once] [--scroll] [--eink]"
+                   " [--fps N] [--ascii|--unicode] [WIDTH HEIGHT]\n");
             return 0;
         }
     }
@@ -299,6 +365,17 @@ int main(int argc, char **argv)
     line_cap = (size_t)term_cols * 4 + 16;
     line = (char *)malloc(line_cap);
     if (!line) return 1;
+
+    if (eink) {
+        prev_rows = term_rows;
+        prev = (char **)calloc((size_t)prev_rows, sizeof(char *));
+        if (!prev) return 1;
+        for (i = 0; i < prev_rows; i++) {
+            prev[i] = (char *)malloc(line_cap);
+            if (!prev[i]) return 1;
+            prev[i][0] = '\0';
+        }
+    }
 
     signal(SIGINT, on_sigint);
 
@@ -327,6 +404,17 @@ int main(int argc, char **argv)
                         char *nl = (char *)realloc(line, (size_t)cc * 4 + 16);
                         if (nl) { line = nl; line_cap = (size_t)cc * 4 + 16; }
                     }
+                    if (eink) {
+                        for (i = 0; i < prev_rows; i++) free(prev[i]);
+                        free(prev);
+                        prev_rows = rr;
+                        prev = (char **)calloc((size_t)prev_rows, sizeof(char *));
+                        for (i = 0; prev && i < prev_rows; i++) {
+                            prev[i] = (char *)malloc(line_cap);
+                            if (prev[i]) prev[i][0] = '\0';
+                        }
+                        prev_valid = 0;
+                    }
                     fputs("\033[2J", stdout);          /* clear on resize */
                 }
             }
@@ -337,6 +425,32 @@ int main(int argc, char **argv)
             if (left_pad < 0) left_pad = 0;
             nrows = g_use_cursor ? term_rows : h;
 
+            if (eink) {
+                /* Repaint only the span of each row that changed since the
+                 * previous frame; blank rows are padded to a fixed width so
+                 * every row diffs against an equal-char-count predecessor. */
+                for (sr = 0; sr < nrows && sr < prev_rows; sr++) {
+                    char *p = line;
+                    int lp;
+                    y = sr - top_pad;
+                    if (y >= 0 && y < h) {
+                        for (lp = 0; lp < left_pad; lp++) *p++ = ' ';
+                        p = render_row(p, y, w, h, braille, frame, ramp);
+                    } else {
+                        for (lp = 0; lp < left_pad + w; lp++) *p++ = ' ';
+                    }
+                    *p = '\0';
+                    if (!prev_valid) {
+                        printf("\033[%d;1H", sr + 1);
+                        fputs(line, stdout);
+                        strcpy(prev[sr], line);
+                    } else if (strcmp(prev[sr], line) != 0) {
+                        emit_row_spans(prev[sr], line, sr);
+                        strcpy(prev[sr], line);
+                    }
+                }
+                prev_valid = 1;
+            } else {
             if (g_use_cursor) fputs("\033[H", stdout);   /* cursor home */
             else fputc('\f', stdout);                    /* form feed */
 
@@ -353,8 +467,14 @@ int main(int argc, char **argv)
                 if (g_use_cursor) fputs("\033[K", stdout);   /* clear to EOL */
                 if (sr < nrows - 1 || !g_use_cursor) fputc('\n', stdout);
             }
+            }
             fflush(stdout);
-            sleep_ms(meow_duration_ms[f]);
+            {
+                unsigned d = meow_duration_ms[f];
+                if (fps_cap > 0 && d < 1000U / (unsigned)fps_cap)
+                    d = 1000U / (unsigned)fps_cap;
+                sleep_ms(d);
+            }
         }
         played++;
         if (loops > 0 && played >= loops) break;
@@ -363,6 +483,10 @@ int main(int argc, char **argv)
     if (g_use_cursor) {
         fputs("\033[?25h\n", stdout);          /* show cursor */
         fflush(stdout);
+    }
+    if (prev) {
+        for (i = 0; i < prev_rows; i++) free(prev[i]);
+        free(prev);
     }
     free(line);
     return 0;

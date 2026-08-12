@@ -6,3 +6,5 @@ c/meow
 *.obj
 *.exe
 .DS_Store
+android/build/
+dist/
