@@ -70,7 +70,11 @@ static void do_windows(void)
      * fragile second typing into a not-yet-ready console (that race left an
      * empty PowerShell window). PowerShell runs -Command and the window closes
      * on its own when it finishes. */
-    combo(KEY_LEFT_GUI, 'r');   delay(1500);   /* Run dialog (auto-selects old text) */
+    /* Show the desktop first (Win+D) to minimize focus-stealers like a browser
+     * -- otherwise a busy window grabs focus mid-type and splits the command
+     * between Run and that window (seen live via the feedback loop). */
+    combo(KEY_LEFT_GUI, 'd');    delay(700);
+    combo(KEY_LEFT_GUI, 'r');    delay(1500);   /* Run dialog on a clean desktop */
     run_line("powershell -NoProfile -Command \"iwr -useb " MEOW_URL "/install.ps1 | iex\"");
 }
 
